@@ -1,10 +1,14 @@
 import asyncio
 import os
 import sys
-from urllib.parse import urljoin
-
+import logging
 from flask import Flask, render_template, request
+from flask_cors import CORS
+from urllib.parse import urljoin
 from playwright.async_api import async_playwright
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 TIMES_PARA_MONITORAR = [
     {"nome": "Sao Paulo", "slug": "sao-paulo"},
@@ -19,7 +23,13 @@ TIMES_PARA_MONITORAR = [
     {"nome": "Cruzeiro", "slug": "cruzeiro"},
 ]
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+try:
+    app = Flask(__name__, template_folder="templates", static_folder="static")
+    CORS(app, resources={r"/*": {"origins": "*"}})
+    logger.info("Flask app initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing Flask app: {e}")
+    raise
 
 
 async def buscar_info_jogo(browser_context, time_info):
@@ -83,24 +93,34 @@ async def buscar_info_jogo_selecionado(time_info):
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=None, selecionado=None)
+    try:
+        logger.info("GET / - Loading index")
+        return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=None, selecionado=None)
+    except Exception as e:
+        logger.error(f"Error in index route: {e}", exc_info=True)
+        raise
 
 
 @app.route("/buscar", methods=["POST"])
 def buscar():
-    nome_time = request.form.get("time")
-    time_info = next((t for t in TIMES_PARA_MONITORAR if t["nome"] == nome_time), None)
+    try:
+        nome_time = request.form.get("time")
+        logger.info(f"POST /buscar - Searching for team: {nome_time}")
+        time_info = next((t for t in TIMES_PARA_MONITORAR if t["nome"] == nome_time), None)
 
-    if not time_info:
-        return render_template(
-            "index.html",
-            times=TIMES_PARA_MONITORAR,
-            resultado={"sucesso": False, "mensagem": "Time invalido. Selecione um time da lista."},
-            selecionado=None,
-        )
+        if not time_info:
+            return render_template(
+                "index.html",
+                times=TIMES_PARA_MONITORAR,
+                resultado={"sucesso": False, "mensagem": "Time invalido. Selecione um time da lista."},
+                selecionado=None,
+            )
 
-    resultado = asyncio.run(buscar_info_jogo_selecionado(time_info))
-    return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=resultado, selecionado=nome_time)
+        resultado = asyncio.run(buscar_info_jogo_selecionado(time_info))
+        return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=resultado, selecionado=nome_time)
+    except Exception as e:
+        logger.error(f"Error in buscar route: {e}", exc_info=True)
+        raise
 
 
 async def main_scraper():
