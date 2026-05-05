@@ -10,6 +10,8 @@ from playwright.async_api import async_playwright
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 TIMES_PARA_MONITORAR = [
     {"nome": "Sao Paulo", "slug": "sao-paulo"},
     {"nome": "Palmeiras", "slug": "palmeiras"},
@@ -24,7 +26,7 @@ TIMES_PARA_MONITORAR = [
 ]
 
 try:
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"), static_folder=os.path.join(BASE_DIR, "static"))
     CORS(app, resources={r"/*": {"origins": "*"}})
     logger.info("Flask app initialized successfully")
 except Exception as e:
