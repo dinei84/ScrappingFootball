@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scraping Futebol</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="container">
+    <h1>Escolha um time</h1>
+
+    <form method="post" action="/buscar">
+      <label for="time">Time</label>
+      <select id="time" name="time" required>
+        <option value="" disabled selected>Selecione um time</option>
+        {% for time in times %}
+          <option value="{{ time.nome }}" {% if selecionado == time.nome %}selected{% endif %}>{{ time.nome }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Buscar informação</button>
+    </form>
+
+    {% if resultado %}
+      <div class="card">
+        <h2>{{ selecionado }}</h2>
+        {% if resultado.sucesso %}
+          <p><strong>Horário:</strong> {{ resultado.horario }}</p>
+          <p><strong>Transmissão:</strong> {{ resultado.transmissao }}</p>
+        {% else %}
+          <p class="error">{{ resultado.mensagem }}</p>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+</body>
+</html>

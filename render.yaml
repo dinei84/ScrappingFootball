@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: scrappingfootball
+    env: python
+    buildCommand: pip install -r ./requirements.txt && playwright install chromium
+    startCommand: gunicorn scrappingfootbla:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHONUNBUFFERED
+        value: "1"
