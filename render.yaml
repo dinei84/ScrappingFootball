@@ -2,7 +2,7 @@ services:
   - type: web
     name: scrappingfootball
     env: python
-    buildCommand: pip install -r ./requirements.txt && python -m playwright install chromium && python -m playwright install-deps chromium
+    buildCommand: pip install -r ./requirements.txt && python -m playwright install chromium
     startCommand: gunicorn scrappingfootbla:app --bind 0.0.0.0:$PORT
     envVars:
       - key: FLASK_ENV
@@ -11,3 +11,23 @@ services:
         value: "1"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /opt/render/.cache/ms-playwright
+    nixPackages:
+      - pkgconfig
+      - libavif
+      - gtk3
+      - libgbm
+      - libxkbcommon
+      - nss
+      - nspr
+      - dbus
+      - atk
+      - at-spi2-atk
+      - cups
+      - libpulse
+      - libxrandr
+      - libxinerama
+      - libxcursor
+      - libxi
+      - libxtst
+      - libxext
+      - libx11
