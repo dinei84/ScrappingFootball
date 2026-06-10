@@ -1,11 +1,14 @@
-import asyncio
 import os
 import sys
+import time
 import logging
-from flask import Flask, render_template, request
-from flask_cors import CORS
+import threading
 from urllib.parse import urljoin
-from playwright.async_api import async_playwright
+
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask, render_template, request
+from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,27 +28,54 @@ TIMES_PARA_MONITORAR = [
     {"nome": "Cruzeiro", "slug": "cruzeiro"},
 ]
 
-try:
-    app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"), static_folder=os.path.join(BASE_DIR, "static"))
-    CORS(app, resources={r"/*": {"origins": "*"}})
-    logger.info("Flask app initialized successfully")
-except Exception as e:
-    logger.error(f"Error initializing Flask app: {e}")
-    raise
+REQUEST_TIMEOUT = 15  # segundos por requisicao HTTP
+CACHE_TTL_SUCESSO = 600  # 10 min: resultado valido muda pouco ao longo do dia
+CACHE_TTL_FALHA = 60  # 1 min: evita martelar o site quando algo falha
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "pt-BR,pt;q=0.9",
+}
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, "templates"),
+    static_folder=os.path.join(BASE_DIR, "static"),
+)
+
+_session = requests.Session()
+_session.headers.update(HEADERS)
+
+_cache = {}
+_cache_lock = threading.Lock()
 
 
-async def buscar_info_jogo(browser_context, time_info):
-    """Processa um time por vez e retorna horario/transmissao."""
+def _primeiro_li_contendo(soup, termos):
+    """Retorna o texto do primeiro <li> cujo conteudo contenha um dos termos."""
+    for li in soup.find_all("li"):
+        texto = li.get_text(" ", strip=True)
+        texto_lower = texto.lower()
+        if any(termo in texto_lower for termo in termos):
+            return texto
+    return None
+
+
+def buscar_info_jogo(time_info):
+    """Busca horario/transmissao do proximo jogo do time no ge.globo.com."""
     nome = time_info["nome"]
     slug = time_info["slug"]
-    page = await browser_context.new_page()
     url_base = f"https://ge.globo.com/futebol/times/{slug}/"
 
     try:
-        await page.goto(url_base, timeout=60000)
-        link_elemento = page.locator("a[href*='onde-assistir']").first
+        resposta = _session.get(url_base, timeout=REQUEST_TIMEOUT)
+        resposta.raise_for_status()
+        soup = BeautifulSoup(resposta.text, "html.parser")
 
-        if await link_elemento.count() == 0:
+        link_elemento = soup.select_one("a[href*='onde-assistir']")
+        if not link_elemento or not link_elemento.get("href"):
             return {
                 "sucesso": False,
                 "horario": None,
@@ -53,94 +83,107 @@ async def buscar_info_jogo(browser_context, time_info):
                 "mensagem": "Nenhuma noticia de 'onde assistir' encontrada no momento.",
             }
 
-        link_noticia = await link_elemento.get_attribute("href")
-        if not link_noticia:
+        url_noticia = urljoin(url_base, link_elemento["href"])
+        resposta = _session.get(url_noticia, timeout=REQUEST_TIMEOUT)
+        resposta.raise_for_status()
+        soup = BeautifulSoup(resposta.text, "html.parser")
+
+        # O corpo da noticia lista horario e transmissao em itens <li>
+        artigo = soup.select_one(".mc-article-body") or soup
+        transmissao = _primeiro_li_contendo(artigo, ("transmiss",))
+        horario = _primeiro_li_contendo(artigo, ("horário", "horario", "hora:"))
+
+        if not transmissao and not horario:
             return {
                 "sucesso": False,
                 "horario": None,
                 "transmissao": None,
-                "mensagem": "Link da noticia nao encontrado.",
+                "mensagem": "Noticia encontrada, mas sem horario/transmissao no formato esperado.",
             }
-
-        await page.goto(urljoin(url_base, link_noticia), timeout=60000)
-
-        transmissao = await page.locator("li:has-text('Transmiss')").first.inner_text()
-        horario = await page.locator("li:has-text('Hor')").first.inner_text()
 
         return {
             "sucesso": True,
-            "horario": horario.strip(),
-            "transmissao": transmissao.strip(),
+            "horario": horario,
+            "transmissao": transmissao,
             "mensagem": "Informacao obtida com sucesso.",
         }
-    except Exception:
+    except requests.RequestException:
+        logger.exception("Erro de rede ao processar %s", nome)
         return {
             "sucesso": False,
             "horario": None,
             "transmissao": None,
             "mensagem": f"Erro ao processar {nome}. Tente novamente mais tarde.",
         }
-    finally:
-        await page.close()
 
 
-async def buscar_info_jogo_selecionado(time_info):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-        resultado = await buscar_info_jogo(context, time_info)
-        await browser.close()
-        return resultado
+def buscar_com_cache(time_info):
+    slug = time_info["slug"]
+    agora = time.time()
+
+    with _cache_lock:
+        entrada = _cache.get(slug)
+        if entrada and agora < entrada["expira_em"]:
+            return entrada["resultado"]
+
+    resultado = buscar_info_jogo(time_info)
+    ttl = CACHE_TTL_SUCESSO if resultado["sucesso"] else CACHE_TTL_FALHA
+    with _cache_lock:
+        _cache[slug] = {"resultado": resultado, "expira_em": agora + ttl}
+    return resultado
 
 
 @app.route("/", methods=["GET"])
 def index():
-    try:
-        logger.info("GET / - Loading index")
-        return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=None, selecionado=None)
-    except Exception as e:
-        logger.error(f"Error in index route: {e}", exc_info=True)
-        raise
+    return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=None, selecionado=None)
 
 
 @app.route("/buscar", methods=["POST"])
 def buscar():
-    try:
-        nome_time = request.form.get("time")
-        logger.info(f"POST /buscar - Searching for team: {nome_time}")
-        time_info = next((t for t in TIMES_PARA_MONITORAR if t["nome"] == nome_time), None)
+    nome_time = request.form.get("time")
+    logger.info("POST /buscar - time: %s", nome_time)
+    time_info = next((t for t in TIMES_PARA_MONITORAR if t["nome"] == nome_time), None)
 
-        if not time_info:
-            return render_template(
-                "index.html",
-                times=TIMES_PARA_MONITORAR,
-                resultado={"sucesso": False, "mensagem": "Time invalido. Selecione um time da lista."},
-                selecionado=None,
-            )
+    if not time_info:
+        return render_template(
+            "index.html",
+            times=TIMES_PARA_MONITORAR,
+            resultado={"sucesso": False, "mensagem": "Time invalido. Selecione um time da lista."},
+            selecionado=None,
+        )
 
-        resultado = asyncio.run(buscar_info_jogo_selecionado(time_info))
-        return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=resultado, selecionado=nome_time)
-    except Exception as e:
-        logger.error(f"Error in buscar route: {e}", exc_info=True)
-        raise
+    resultado = buscar_com_cache(time_info)
+    return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=resultado, selecionado=nome_time)
 
 
-async def main_scraper():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-        for time in TIMES_PARA_MONITORAR:
-            resultado = await buscar_info_jogo(context, time)
-            if resultado["sucesso"]:
-                print(f"[OK] {time['nome']}: {resultado['horario']} | {resultado['transmissao']}")
-            else:
-                print(f"[ERRO] {time['nome']}: {resultado['mensagem']}")
-        await browser.close()
+@app.errorhandler(Exception)
+def erro_inesperado(e):
+    if isinstance(e, HTTPException):
+        return e
+    logger.exception("Erro inesperado")
+    return (
+        render_template(
+            "index.html",
+            times=TIMES_PARA_MONITORAR,
+            resultado={"sucesso": False, "mensagem": "Erro inesperado no servidor. Tente novamente."},
+            selecionado=None,
+        ),
+        500,
+    )
+
+
+def main_scraper():
+    for time_info in TIMES_PARA_MONITORAR:
+        resultado = buscar_info_jogo(time_info)
+        if resultado["sucesso"]:
+            print(f"[OK] {time_info['nome']}: {resultado['horario']} | {resultado['transmissao']}")
+        else:
+            print(f"[ERRO] {time_info['nome']}: {resultado['mensagem']}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--cli":
-        asyncio.run(main_scraper())
+        main_scraper()
     else:
         port = int(os.environ.get("PORT", "5000"))
         app.run(host="0.0.0.0", port=port, debug=False)

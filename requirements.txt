@@ -1,4 +1,4 @@
 Flask
-playwright
 gunicorn
-flask-cors
+requests
+beautifulsoup4

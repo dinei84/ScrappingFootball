@@ -1,6 +1,6 @@
 # Scrapping Football
 
-Projeto simples em Python para monitorar informações de jogos de times de futebol usando Flask e Playwright.
+Projeto simples em Python para monitorar informações de jogos de times de futebol usando Flask, `requests` e BeautifulSoup.
 
 ## Dependências
 
@@ -13,18 +13,10 @@ python -m pip install -r requirements.txt
 ### Bibliotecas principais
 
 - `Flask` - para rodar a interface web
-- `playwright` - para navegar pelo site e extrair as informações
+- `requests` + `beautifulsoup4` - para buscar e extrair as informações do ge.globo.com
 - `gunicorn` - servidor de produção usado no Render
 
-### Instalar navegadores do Playwright
-
-Após instalar as bibliotecas, execute:
-
-```bash
-python -m playwright install chromium
-```
-
-Isso baixa o navegador Chromium necessário para o Playwright funcionar corretamente no Render.
+> **Nota:** o projeto não usa mais Playwright. As páginas do ge.globo.com são renderizadas no servidor, então uma requisição HTTP simples é suficiente — o que torna a aplicação muito mais leve, rápida e compatível com o Render sem dependências de navegador.
 
 ## Como usar localmente
 
@@ -50,41 +42,24 @@ Isso executa a coleta para todos os times definidos em `TIMES_PARA_MONITORAR` e 
 
 ## Deploy no Render
 
-O projeto já foi preparado para deploy no Render com os seguintes ajustes:
+O projeto está preparado para deploy no Render:
 
-- `requirements.txt` agora inclui `gunicorn`.
+- `render.yaml` descreve o serviço Web (build e start commands).
 - `scrappingfootbla.py` usa `PORT` via `os.environ.get("PORT", "5000")`.
-- Um arquivo `render.yaml` foi adicionado para configurar o serviço Web no Render.
-- O workflow GitHub Actions foi atualizado para instalar o navegador Chromium do Playwright.
 
 ### Configuração recomendada no Render
 
 1. No painel do Render, crie um novo serviço `Web Service`.
-2. Conecte ao repositório `automacoes/ScrappingFootball`.
+2. Conecte ao repositório.
 3. Caso use o `render.yaml`, o Render lerá estas configurações automaticamente.
 4. Se configurar manualmente, use:
-   - `Build Command`: `pip install -r ./requirements.txt && playwright install chromium`
-   - `Start Command`: `gunicorn scrappingfootbla:app --bind 0.0.0.0:$PORT`
-   - Atenção: cole o comando exatamente como acima, sem formatação Markdown ou links.
-5. Adicione variáveis de ambiente no Render se precisar (opcional):
+   - `Build Command`: `pip install -r requirements.txt`
+   - `Start Command`: `gunicorn scrappingfootbla:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 60`
+5. Variáveis de ambiente (opcional):
    - `FLASK_ENV=production`
    - `PYTHONUNBUFFERED=1`
 
-### Troubleshooting: requisitos não encontrados
+### Performance
 
-- Verifique se o serviço no Render está usando a raiz do repositório como diretório de trabalho.
-- Se você estiver usando um `Root Directory`, deixe-o em branco para usar a pasta principal onde está `requirements.txt`.
-- Garanta que o comando de build esteja exatamente como texto simples, sem copiar links ou formatação do editor.
-
-### Deploy via GitHub Actions
-
-Se quiser deploy automático pelo GitHub Actions, configure:
-
-- Secret `RENDER_API_KEY` no repositório GitHub.
-- Workflow em `.github/workflows/render.yaml` com `project-name: scrappingfootball` ou altere para o nome real do serviço no Render.
-
-### Observações finais
-
-- O arquivo `render.yaml` existe no repositório e descreve o serviço para o Render.
-- O comando principal de produção é `gunicorn scrappingfootbla:app --bind 0.0.0.0:$PORT`.
-- Se preferir, você pode usar apenas a configuração do painel do Render e não depender do GitHub Action.
+- Os resultados são cacheados em memória por 10 minutos por time (1 minuto em caso de falha), evitando requisições repetidas ao ge.globo.com.
+- O gunicorn roda com 2 workers e 4 threads cada, permitindo requisições concorrentes.
