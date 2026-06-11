@@ -15,18 +15,44 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+GE_BASE = "https://ge.globo.com"
+
 TIMES_PARA_MONITORAR = [
-    {"nome": "Sao Paulo", "slug": "sao-paulo"},
-    {"nome": "Palmeiras", "slug": "palmeiras"},
-    {"nome": "Corinthians", "slug": "corinthians"},
-    {"nome": "Santos", "slug": "santos"},
-    {"nome": "Flamengo", "slug": "flamengo"},
-    {"nome": "Vasco", "slug": "vasco"},
-    {"nome": "Gremio", "slug": "gremio"},
-    {"nome": "Internacional", "slug": "internacional"},
-    {"nome": "Atletico-MG", "slug": "atletico-mg"},
-    {"nome": "Cruzeiro", "slug": "cruzeiro"},
+    {"nome": "Sao Paulo", "url": f"{GE_BASE}/futebol/times/sao-paulo/"},
+    {"nome": "Palmeiras", "url": f"{GE_BASE}/futebol/times/palmeiras/"},
+    {"nome": "Corinthians", "url": f"{GE_BASE}/futebol/times/corinthians/"},
+    {"nome": "Santos", "url": f"{GE_BASE}/futebol/times/santos/"},
+    {"nome": "Flamengo", "url": f"{GE_BASE}/futebol/times/flamengo/"},
+    {"nome": "Vasco", "url": f"{GE_BASE}/futebol/times/vasco/"},
+    {"nome": "Gremio", "url": f"{GE_BASE}/futebol/times/gremio/"},
+    {"nome": "Internacional", "url": f"{GE_BASE}/futebol/times/internacional/"},
+    {"nome": "Atletico-MG", "url": f"{GE_BASE}/futebol/times/atletico-mg/"},
+    {"nome": "Cruzeiro", "url": f"{GE_BASE}/futebol/times/cruzeiro/"},
 ]
+
+# A selecao brasileira tem URL propria; as demais seguem /futebol/selecoes/<slug>/
+SELECOES_PARA_MONITORAR = [
+    {"nome": "Brasil", "url": f"{GE_BASE}/futebol/selecao-brasileira/"},
+    {"nome": "Alemanha", "url": f"{GE_BASE}/futebol/selecoes/alemanha/"},
+    {"nome": "Itália", "url": f"{GE_BASE}/futebol/selecoes/italia/"},
+    {"nome": "Argentina", "url": f"{GE_BASE}/futebol/selecoes/argentina/"},
+    {"nome": "França", "url": f"{GE_BASE}/futebol/selecoes/franca/"},
+    {"nome": "Uruguai", "url": f"{GE_BASE}/futebol/selecoes/uruguai/"},
+    {"nome": "Espanha", "url": f"{GE_BASE}/futebol/selecoes/espanha/"},
+    {"nome": "Inglaterra", "url": f"{GE_BASE}/futebol/selecoes/inglaterra/"},
+    {"nome": "Bélgica", "url": f"{GE_BASE}/futebol/selecoes/belgica/"},
+    {"nome": "Croácia", "url": f"{GE_BASE}/futebol/selecoes/croacia/"},
+    {"nome": "Holanda", "url": f"{GE_BASE}/futebol/selecoes/holanda/"},
+    {"nome": "Portugal", "url": f"{GE_BASE}/futebol/selecoes/portugal/"},
+    {"nome": "Marrocos", "url": f"{GE_BASE}/futebol/selecoes/marrocos/"},
+    {"nome": "Japão", "url": f"{GE_BASE}/futebol/selecoes/japao/"},
+    {"nome": "Senegal", "url": f"{GE_BASE}/futebol/selecoes/senegal/"},
+]
+
+CATEGORIAS = {
+    "times": {"rotulo": "Time", "itens": TIMES_PARA_MONITORAR},
+    "selecoes": {"rotulo": "Seleção", "itens": SELECOES_PARA_MONITORAR},
+}
 
 REQUEST_TIMEOUT = 15  # segundos por requisicao HTTP
 CACHE_TTL_SUCESSO = 600  # 10 min: resultado valido muda pouco ao longo do dia
@@ -63,11 +89,10 @@ def _primeiro_li_contendo(soup, termos):
     return None
 
 
-def buscar_info_jogo(time_info):
-    """Busca horario/transmissao do proximo jogo do time no ge.globo.com."""
-    nome = time_info["nome"]
-    slug = time_info["slug"]
-    url_base = f"https://ge.globo.com/futebol/times/{slug}/"
+def buscar_info_jogo(item):
+    """Busca horario/transmissao do proximo jogo no ge.globo.com."""
+    nome = item["nome"]
+    url_base = item["url"]
 
     try:
         resposta = _session.get(url_base, timeout=REQUEST_TIMEOUT)
@@ -117,43 +142,62 @@ def buscar_info_jogo(time_info):
         }
 
 
-def buscar_com_cache(time_info):
-    slug = time_info["slug"]
+def buscar_com_cache(item):
+    chave = item["url"]
     agora = time.time()
 
     with _cache_lock:
-        entrada = _cache.get(slug)
+        entrada = _cache.get(chave)
         if entrada and agora < entrada["expira_em"]:
             return entrada["resultado"]
 
-    resultado = buscar_info_jogo(time_info)
+    resultado = buscar_info_jogo(item)
     ttl = CACHE_TTL_SUCESSO if resultado["sucesso"] else CACHE_TTL_FALHA
     with _cache_lock:
-        _cache[slug] = {"resultado": resultado, "expira_em": agora + ttl}
+        _cache[chave] = {"resultado": resultado, "expira_em": agora + ttl}
     return resultado
+
+
+def _aba_valida(aba):
+    return aba if aba in CATEGORIAS else "times"
+
+
+def _render_pagina(aba, resultado=None, selecionado=None, status=200):
+    return (
+        render_template(
+            "index.html",
+            aba=aba,
+            categorias=CATEGORIAS,
+            itens=CATEGORIAS[aba]["itens"],
+            rotulo=CATEGORIAS[aba]["rotulo"],
+            resultado=resultado,
+            selecionado=selecionado,
+        ),
+        status,
+    )
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=None, selecionado=None)
+    aba = _aba_valida(request.args.get("aba", "times"))
+    return _render_pagina(aba)
 
 
 @app.route("/buscar", methods=["POST"])
 def buscar():
-    nome_time = request.form.get("time")
-    logger.info("POST /buscar - time: %s", nome_time)
-    time_info = next((t for t in TIMES_PARA_MONITORAR if t["nome"] == nome_time), None)
+    aba = _aba_valida(request.form.get("categoria", "times"))
+    nome = request.form.get("time")
+    logger.info("POST /buscar - categoria: %s, nome: %s", aba, nome)
 
-    if not time_info:
-        return render_template(
-            "index.html",
-            times=TIMES_PARA_MONITORAR,
-            resultado={"sucesso": False, "mensagem": "Time invalido. Selecione um time da lista."},
-            selecionado=None,
+    item = next((i for i in CATEGORIAS[aba]["itens"] if i["nome"] == nome), None)
+    if not item:
+        return _render_pagina(
+            aba,
+            resultado={"sucesso": False, "mensagem": "Opcao invalida. Selecione uma opcao da lista."},
         )
 
-    resultado = buscar_com_cache(time_info)
-    return render_template("index.html", times=TIMES_PARA_MONITORAR, resultado=resultado, selecionado=nome_time)
+    resultado = buscar_com_cache(item)
+    return _render_pagina(aba, resultado=resultado, selecionado=nome)
 
 
 @app.errorhandler(Exception)
@@ -161,24 +205,21 @@ def erro_inesperado(e):
     if isinstance(e, HTTPException):
         return e
     logger.exception("Erro inesperado")
-    return (
-        render_template(
-            "index.html",
-            times=TIMES_PARA_MONITORAR,
-            resultado={"sucesso": False, "mensagem": "Erro inesperado no servidor. Tente novamente."},
-            selecionado=None,
-        ),
-        500,
+    return _render_pagina(
+        "times",
+        resultado={"sucesso": False, "mensagem": "Erro inesperado no servidor. Tente novamente."},
+        status=500,
     )
 
 
 def main_scraper():
-    for time_info in TIMES_PARA_MONITORAR:
-        resultado = buscar_info_jogo(time_info)
-        if resultado["sucesso"]:
-            print(f"[OK] {time_info['nome']}: {resultado['horario']} | {resultado['transmissao']}")
-        else:
-            print(f"[ERRO] {time_info['nome']}: {resultado['mensagem']}")
+    for categoria in CATEGORIAS.values():
+        for item in categoria["itens"]:
+            resultado = buscar_info_jogo(item)
+            if resultado["sucesso"]:
+                print(f"[OK] {item['nome']}: {resultado['horario']} | {resultado['transmissao']}")
+            else:
+                print(f"[ERRO] {item['nome']}: {resultado['mensagem']}")
 
 
 if __name__ == "__main__":
